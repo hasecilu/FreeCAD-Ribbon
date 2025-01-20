@@ -4,7 +4,7 @@
 #
 # Create, update and release translation files.
 #
-# Supported locales on FreeCAD <2024-10-14, FreeCADGui.supportedLocales(), total=44>:
+# Supported locales on FreeCAD <2025-01-20, FreeCADGui.supportedLocales(), total=44>:
 # 	{'English': 'en', 'Afrikaans': 'af', 'Arabic': 'ar', 'Basque': 'eu', 'Belarusian': 'be',
 # 	'Bulgarian': 'bg', 'Catalan': 'ca', 'Chinese Simplified': 'zh-CN',
 # 	'Chinese Traditional': 'zh-TW', 'Croatian': 'hr', 'Czech': 'cs', 'Danish': 'da',
@@ -67,7 +67,7 @@ update_locale() {
 	local u=${locale:+_} # Conditional underscore
 	FILES="../*.py ../Resources/ui/*.ui"
 
-	# NOTE: Execute the right commands depending on:
+	# NOTE: Execute the right command depending on:
 	# - if it's a locale file or the main, agnostic one
 	[ ! -f "${WB}${u}${locale}.ts" ] && action="Creating" || action="Updating"
 	echo -e "\033[1;34m\n\t<<< ${action} '${WB}${u}${locale}.ts' file >>>\n\033[m"
@@ -75,7 +75,7 @@ update_locale() {
 		eval $LUPDATE "$FILES" -ts "${WB}.ts" # locale-agnostic file
 	else
 		eval $LUPDATE "$FILES" -source-language en_US -target-language "${locale//-/_}" \
-			-ts "${WB}_${locale}.ts"
+			-ts "${WB}_${locale}.ts" -no-obsolete
 	fi
 }
 
@@ -99,12 +99,31 @@ normalize_crowdin_files() {
 	done
 }
 
+git_add_above_threshold() {
+	local ts_file=$1
+
+	csv_output=$(pocount --csv "$ts_file" | tail -n 1)
+	translated_messages=$(echo "$csv_output" | cut -d',' -f2)
+	total_messages=$(echo "$csv_output" | cut -d',' -f9)
+
+	progress_percentage=$((translated_messages * 100 / total_messages))
+
+	echo "Translation progress for $ts_file: $progress_percentage%"
+
+	if [ "$progress_percentage" -ge 20 ]; then
+		git add "${ts_file::-2}"* # to add ts and qm files
+	else
+		rm "${ts_file::-2}"* # remove files with no progress
+	fi
+}
+
 help() {
 	echo -e "\nDescription:"
 	echo -e "\tCreate, update and release translation files."
 	echo -e "\nUsage:"
 	echo -e "\t./update_translation.sh [-R] [-U] [-r <locale>] [-u <locale>]"
 	echo -e "\nFlags:"
+	echo -e "  -A\n\tAdd files above threshold to commit them"
 	echo -e "  -R\n\tRelease all translations (qm files)"
 	echo -e "  -U\n\tUpdate all translations (ts files)"
 	echo -e "  -r <locale>\n\tRelease the specified locale"
@@ -124,8 +143,14 @@ sed -i '3s/-/_/' ${WB}*.ts               # Enforce underscore on locales
 sed -i '3s/\"en\"/\"en_US\"/g' ${WB}*.ts # Use en_US
 
 if [ $# -eq 1 ]; then
-	if [ "$1" == "-R" ]; then
-		find . -type f -name '*_*.ts' | while IFS= read -r file; do
+	if [ "$1" == "-A" ]; then
+		find . -type f -name "${WB}_*.ts" | while IFS= read -r file; do
+			git_add_above_threshold "$file"
+		done
+		git status
+		# git commit -m "Update translations from CrowdIn"
+	elif [ "$1" == "-R" ]; then
+		find . -type f -name "${WB}_*.ts" | while IFS= read -r file; do
 			# Release all locales
 			$LRELEASE -nounfinished "$file"
 			echo
